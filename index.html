@@ -2671,72 +2671,10 @@ body.light-theme .drop-zone, body.light-theme .puzzle-build-shell { background: 
 
 <script>
 
-const SUPABASE_URL = "https://vljahanihfhnnsvqsaog.supabase.co";
-const SUPABASE_KEY = "sb_publishable_DMkSD2_i4WMxJioH7iCFig_lVUz-a_5";
-
-const configured =
-  SUPABASE_URL.startsWith("https://") &&
-  !SUPABASE_URL.includes("ВСТАВЬ");
-
+// OFFLINE DIAGNOSTIC BUILD: external database and storage are deliberately disabled.
+// This build is only for checking whether the page shell and inline JavaScript load.
 let db = null;
-
-function loadSupabaseSdk(src, timeoutMs = 6000) {
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    let settled = false;
-
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      if (error) {
-        script.remove();
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-
-    const timer = window.setTimeout(
-      () => finish(new Error("Истекло время загрузки Supabase SDK: " + src)),
-      timeoutMs
-    );
-
-    script.async = true;
-    script.onload = () => {
-      if (window.supabase && typeof window.supabase.createClient === "function") {
-        finish();
-      } else {
-        finish(new Error("Supabase SDK загружен, но createClient не найден."));
-      }
-    };
-    script.onerror = () => finish(new Error("Не удалось загрузить Supabase SDK: " + src));
-    script.src = src;
-    document.head.appendChild(script);
-  });
-}
-
-async function initializeSupabase() {
-  if (!configured) return;
-
-  const cdnSources = [
-    "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
-    "https://unpkg.com/@supabase/supabase-js@2"
-  ];
-
-  for (const src of cdnSources) {
-    try {
-      await loadSupabaseSdk(src);
-      db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-      console.info("Supabase SDK успешно загружен:", src);
-      return;
-    } catch (error) {
-      console.warn("Не удалось загрузить Supabase с этого CDN:", error);
-    }
-  }
-
-  console.error("Supabase SDK не загрузился ни с одного CDN. Сайт откроется без данных из базы.");
-}
+console.warn("Palata264 diagnostic build: Supabase/TatNet/Cloud storage are disabled.");
 
 
 let currentUser = null;
@@ -5600,12 +5538,13 @@ window.setTimeout(() => {
 }, 10000);
 
 
-initializeSupabase()
-  .then(() => checkSession())
-  .catch(error => {
-    console.error("Ошибка запуска Supabase:", error);
-    document.getElementById("site-startup-loader")?.classList.add("is-hidden");
-  });
+// No database initialization or session check in this diagnostic build.
+currentUser = null;
+document.getElementById("site-startup-loader")?.classList.add("is-hidden");
+const diagnosticNotice = document.createElement("div");
+diagnosticNotice.textContent = "ТЕСТОВАЯ ВЕРСИЯ: база данных и хранилища отключены";
+diagnosticNotice.style.cssText = "position:fixed;left:10px;bottom:10px;z-index:99999;padding:8px 12px;background:#7a4b00;color:#fff;border-radius:8px;font:12px Arial;";
+document.body.appendChild(diagnosticNotice);
 </script>
 </body>
 </html>
