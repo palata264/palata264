@@ -2686,8 +2686,8 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
 
 <script>
 
-const SUPABASE_URL = "https://vljahanihfhnnsvqsaog.supabase.co";
-const SUPABASE_KEY = "sb_publishable_DMkSD2_i4WMxJioH7iCFig_lVUz-a_5";
+const SUPABASE_URL = "https://5a7059cf0247645a2671e3f5d0951cfd.supa.tatnet.cloud";
+const SUPABASE_KEY = "sb_publishable_vZXzsi2fMJ6MJEwWUjehXzmHfzC1";
 
 const configured =
   SUPABASE_URL.startsWith("https://") &&
@@ -2726,9 +2726,64 @@ function isAuthor() {
   if (!currentUser) return false;
 
   return [
-    "749ba642-b1a6-4fb4-99e6-d181b9f9ddd9",
-    "540c28b0-3e62-468d-8803-677d0e0b2195"
+    "36427818-b713-44cf-9011-2e1ff0a42593",
+    "9b0a0a33-4713-43b3-9948-6f41da5d9369"
   ].includes(currentUser.id);
+}
+
+// Cloud.ru Object Storage используется только для файлов разделов puzzles и puzzles2.
+// В базе TatNet хранится ключ объекта, а не секреты и не временная ссылка.
+const CLOUD_OBJECT_PREFIX = "cloud://";
+
+function isCloudObjectUrl(value) {
+  return typeof value === "string" && value.startsWith(CLOUD_OBJECT_PREFIX);
+}
+
+async function getCloudSessionToken() {
+  const { data, error } = await db.auth.getSession();
+  if (error) throw error;
+  const token = data?.session?.access_token;
+  if (!token) throw new Error("Сессия автора истекла. Войдите снова.");
+  return token;
+}
+
+async function uploadCloudPuzzleFile(file, folder) {
+  if (!isAuthor()) throw new Error("Нет прав на загрузку пазлов.");
+  if (!["puzzles", "puzzles2"].includes(folder)) throw new Error("Недопустимый раздел Cloud.ru.");
+
+  const token = await getCloudSessionToken();
+  const response = await fetch("/api/cloud-upload", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + token
+    },
+    body: JSON.stringify({
+      folder,
+      fileName: file.name,
+      contentType: file.type || "application/octet-stream"
+    })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || "Не удалось получить ссылку Cloud.ru.");
+
+  const uploaded = await fetch(result.uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file
+  });
+  if (!uploaded.ok) throw new Error("Cloud.ru не принял файл (HTTP " + uploaded.status + ").");
+
+  return { url: CLOUD_OBJECT_PREFIX + result.objectKey, path: result.objectKey };
+}
+
+async function resolveCloudObjectUrl(value) {
+  if (!isCloudObjectUrl(value)) return value || "";
+  const objectKey = value.slice(CLOUD_OBJECT_PREFIX.length);
+  const response = await fetch("/api/cloud-read?key=" + encodeURIComponent(objectKey));
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.url) throw new Error(result.error || "Не удалось получить ссылку на файл Cloud.ru.");
+  return result.url;
 }
 
 function openPage(id) {
@@ -4413,7 +4468,9 @@ async function publishPost() {
     status.textContent = "Загрузка файла...";
 
     try {
-      uploaded = await uploadFile(selectedUploadFile);
+      uploaded = isPuzzles2
+        ? await uploadCloudPuzzleFile(selectedUploadFile, "puzzles2")
+        : await uploadFile(selectedUploadFile);
     } catch (error) {
       console.error(error);
       status.textContent =
@@ -4651,10 +4708,8 @@ async function deletePost(post) {
     return;
   }
 
-  if (post.file_url) {
-    await deleteStorageFile(
-      post.file_url
-    );
+  if (post.file_url && !isCloudObjectUrl(post.file_url)) {
+    await deleteStorageFile(post.file_url);
   }
 
   await loadPosts();
@@ -4792,12 +4847,7 @@ async function createPuzzle() {
 }
 
 async function uploadSpecificFile(file, folder) {
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
-  const path = currentUser.id + "/" + folder + "/" + Date.now() + "_" + Math.random().toString(36).slice(2) + "_" + safeName;
-  const { error } = await db.storage.from("uploads").upload(path, file);
-  if (error) throw error;
-  const { data } = db.storage.from("uploads").getPublicUrl(path);
-  return {url:data.publicUrl, path};
+  return uploadCloudPuzzleFile(file, folder);
 }
 
 async function loadPuzzles() {
@@ -4819,7 +4869,7 @@ async function loadPuzzles() {
     (groups[key] ||= []).push(post);
   });
 
-  Object.entries(groups).forEach(([title,pieces]) => {
+  for (const [title, pieces] of Object.entries(groups)) {
     const card=document.createElement("div");
     card.className="puzzle-card";
     const h=document.createElement("h4"); h.textContent=title; card.appendChild(h);
@@ -4834,13 +4884,17 @@ async function loadPuzzles() {
       const mb=(b.description||"").match(/часть (\d+)/);
       return (ma ? Number(ma[1]) : 0) - (mb ? Number(mb[1]) : 0);
     });
-    pieces.forEach(post=>{
+    for (const post of pieces) {
       const img=document.createElement("img");
       img.className="puzzle-piece";
-      img.src=post.file_url;
+      try {
+        img.src = await resolveCloudObjectUrl(post.file_url);
+      } catch (error) {
+        console.error("Не удалось открыть часть пазла:", error);
+      }
       img.alt=post.title || "Пазл";
       grid.appendChild(img);
-    });
+    }
     card.appendChild(grid);
 
     const actions=document.createElement("div");
@@ -4860,7 +4914,8 @@ async function loadPuzzles() {
         if(!confirm(`Удалить пазл «${title}»?`)) return;
         for(const post of pieces){
           await db.from("posts").delete().eq("id",post.id);
-          if(post.file_url) await deleteStorageFile(post.file_url);
+          // Cloud.ru puzzle objects are permanent; deleting a post removes only its TatNet row.
+          if(post.file_url && !isCloudObjectUrl(post.file_url)) await deleteStorageFile(post.file_url);
         }
         await loadPuzzles();
       };
@@ -4868,7 +4923,7 @@ async function loadPuzzles() {
     }
     card.appendChild(actions);
     list.appendChild(card);
-  });
+  }
 }
 
 
@@ -4994,14 +5049,21 @@ async function loadPuzzle2Folders() {
   }
 
   const folders = foldersResult.data || [];
-  const files = filesResult.data || [];
+  const files = await Promise.all((filesResult.data || []).map(async post => {
+    try {
+      return { ...post, display_file_url: await resolveCloudObjectUrl(post.file_url) };
+    } catch (error) {
+      console.error("Не удалось получить ссылку на файл пазла:", error);
+      return { ...post, display_file_url: "" };
+    }
+  }));
 
   const makeFileCard = post => {
     const card = document.createElement("article");
     card.className = "puzzles2-file";
     const preview = document.createElement("div");
     preview.className = "puzzles2-file-preview";
-    const url = post.file_url || "";
+    const url = post.display_file_url || post.file_url || "";
     const fileName = post.title || getFileNameFromUrl(url) || "Файл";
     const ext = (getFileNameFromUrl(url).split(".").pop() || "").toLowerCase();
     if (/\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(url) || ["png","jpg","jpeg","gif","webp","bmp","svg"].includes(ext)) {
